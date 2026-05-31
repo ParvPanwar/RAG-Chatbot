@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.logging_config import configure_logging
-from app.routes import analysis, health, instagram, retrieval, youtube
+from app.routes import analysis, chat, health, instagram, retrieval, youtube
 
 
 def create_app() -> FastAPI:
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     app.include_router(youtube.router)
     app.include_router(instagram.router)
     app.include_router(retrieval.router)
+    app.include_router(chat.router)
     return app
 
 
