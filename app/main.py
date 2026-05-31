@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.logging_config import configure_logging
-from app.routes import health, instagram, youtube
+from app.routes import analysis, health, instagram, youtube
 
 
 def create_app() -> FastAPI:
@@ -17,7 +17,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Keep routers listed in the same order a user would hit the app.
     app.include_router(health.router)
+    app.include_router(analysis.router)
     app.include_router(youtube.router)
     app.include_router(instagram.router)
     return app

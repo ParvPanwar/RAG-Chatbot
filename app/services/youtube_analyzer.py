@@ -23,19 +23,19 @@ class YouTubeAnalysisError(ValueError):
 
 
 def analyze_youtube_video(url: str, assigned_id: str = None) -> YouTubeAnalyzeResponse:
-    video_id = extract_video_id(url)
+    video_id = get_youtube_id(url)
     logger.info(f"Starting analysis of YouTube URL: {url} (ID: {video_id})")
     
-    metadata = fetch_metadata(url)
+    metadata = get_video_metadata(url)
     logger.info(f"YouTube metadata loaded: '{metadata.title}' by {metadata.creator}")
     
     try:
         logger.info(f"Attempting to fetch official captions for YouTube ID {video_id}...")
-        transcript = fetch_transcript(video_id)
+        transcript = get_caption_segments(video_id)
         logger.info(f"Successfully retrieved official captions ({len(transcript)} segments)")
-    except YouTubeAnalysisError as exc:
+    except YouTubeAnalysisError as err:
         logger.warning(
-            f"Official YouTube caption API failed for ID {video_id}: {exc}. "
+            f"Official YouTube caption API failed for ID {video_id}: {err}. "
             "Attempting Whisper audio download and transcription fallback..."
         )
         try:
@@ -50,11 +50,11 @@ def analyze_youtube_video(url: str, assigned_id: str = None) -> YouTubeAnalyzeRe
                 transcript = transcribe_audio(audio_path)
             
             logger.info(f"Whisper fallback successfully generated {len(transcript)} transcript segments!")
-        except Exception as fallback_exc:
-            logger.error(f"Whisper fallback failed for YouTube ID {video_id}: {fallback_exc}", exc_info=True)
+        except Exception as fallback_err:
+            logger.error(f"Whisper fallback failed for YouTube ID {video_id}: {fallback_err}", exc_info=True)
             raise YouTubeAnalysisError(
-                f"Transcript is unavailable. Caption API and audio transcription both failed: {fallback_exc}"
-            ) from fallback_exc
+                f"Transcript is unavailable. Caption API and audio transcription both failed: {fallback_err}"
+            ) from fallback_err
 
     return YouTubeAnalyzeResponse(
         platform="youtube",
@@ -71,7 +71,8 @@ def analyze_youtube_video(url: str, assigned_id: str = None) -> YouTubeAnalyzeRe
     )
 
 
-def extract_video_id(url: str) -> str:
+def get_youtube_id(url: str) -> str:
+    """Accept common YouTube URL shapes and return the canonical video id."""
     parsed = urlparse(url)
     host = parsed.netloc.lower().removeprefix("www.")
 
@@ -98,7 +99,7 @@ def extract_video_id(url: str) -> str:
 def _download_youtube_audio(url: str, output_dir) -> "Path":
     """Download YouTube audio using yt-dlp and return the path to the audio file."""
     from pathlib import Path
-    ydl_options = {
+    ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": str(output_dir / "%(id)s.%(ext)s"),
         "quiet": True,
@@ -106,24 +107,24 @@ def _download_youtube_audio(url: str, output_dir) -> "Path":
         "no_warnings": True,
     }
     try:
-        with YoutubeDL(ydl_options) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-    except DownloadError as exc:
-        logger.error(f"yt-dlp YouTube audio download failed for {url}: {exc}", exc_info=True)
-        raise YouTubeAnalysisError("Unable to download YouTube audio for transcription.") from exc
+    except DownloadError as err:
+        logger.error(f"yt-dlp YouTube audio download failed for {url}: {err}", exc_info=True)
+        raise YouTubeAnalysisError("Unable to download YouTube audio for transcription.") from err
 
     output_dir = Path(output_dir)
     expected_path = output_dir / f"{info.get('id')}.{info.get('ext')}"
     if expected_path.exists():
         return expected_path
 
-    downloaded_files = [p for p in output_dir.iterdir() if p.is_file()]
-    if not downloaded_files:
+    files = [path for path in output_dir.iterdir() if path.is_file()]
+    if not files:
         raise YouTubeAnalysisError("YouTube audio download did not produce a file.")
-    return max(downloaded_files, key=lambda p: p.stat().st_size)
+    return max(files, key=lambda path: path.stat().st_size)
 
 
-def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
+def get_caption_segments(video_id: str) -> list[TranscriptSegment]:
     """Fetch YouTube transcript in any available language.
 
     Strategy:
@@ -181,8 +182,9 @@ def fetch_transcript(video_id: str) -> list[TranscriptSegment]:
     return segments
 
 
-def fetch_metadata(url: str) -> VideoMetadata:
-    ydl_options = {
+def get_video_metadata(url: str) -> VideoMetadata:
+    """Read YouTube metadata and normalize yt-dlp's field names."""
+    ydl_opts = {
         "quiet": True,
         "skip_download": True,
         "extract_flat": False,
@@ -192,23 +194,23 @@ def fetch_metadata(url: str) -> VideoMetadata:
     }
 
     try:
-        with YoutubeDL(ydl_options) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    except DownloadError as exc:
-        logger.error(f"yt-dlp metadata download failed for {url}: {exc}", exc_info=True)
-        raise YouTubeAnalysisError("Unable to retrieve YouTube metadata.") from exc
+    except DownloadError as err:
+        logger.error(f"yt-dlp metadata download failed for {url}: {err}", exc_info=True)
+        raise YouTubeAnalysisError("Unable to retrieve YouTube metadata.") from err
 
     if not info:
         logger.warning(f"yt-dlp extracted no info for {url}.")
         raise YouTubeAnalysisError("Unable to retrieve YouTube metadata.")
 
-    creator = first_text(
+    creator = pick_first_text(
         info.get("uploader"),
         info.get("channel"),
         info.get("creator"),
         info.get("uploader_id"),
         info.get("channel_id"),
-        fetch_oembed_author(url),
+        get_oembed_author(url),
         extract_handle(info.get("channel_url")),
         extract_handle(info.get("uploader_url")),
     )
@@ -216,7 +218,7 @@ def fetch_metadata(url: str) -> VideoMetadata:
     return VideoMetadata(
         title=info.get("title") or "YouTube Video",
         creator=creator,
-        follower_count=first_int(
+        follower_count=pick_first_int(
             info.get("channel_follower_count"),
             info.get("uploader_follower_count"),
             info.get("subscriber_count"),
@@ -227,48 +229,52 @@ def fetch_metadata(url: str) -> VideoMetadata:
         likes=info.get("like_count"),
         comments=info.get("comment_count"),
         upload_date=info.get("upload_date"),
-        duration=first_float(info.get("duration")),
+        duration=pick_first_float(info.get("duration")),
     )
 
 
-def first_text(*values) -> Optional[str]:
-    for value in values:
-        if not value:
+def pick_first_text(*values) -> Optional[str]:
+    """Return the first useful text value from yt-dlp/oEmbed fields."""
+    for raw_value in values:
+        if not raw_value:
             continue
-        text = str(value).strip()
+        text = str(raw_value).strip()
         if text and text.upper() != "NA":
             return text
     return None
 
 
-def first_int(*values) -> Optional[int]:
-    for value in values:
-        if isinstance(value, bool):
+def pick_first_int(*values) -> Optional[int]:
+    """Return the first field that can safely be displayed as a count."""
+    for raw_value in values:
+        if isinstance(raw_value, bool):
             continue
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str) and value.isdigit():
-            return int(value)
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, float):
+            return int(raw_value)
+        if isinstance(raw_value, str) and raw_value.isdigit():
+            return int(raw_value)
     return None
 
 
-def first_float(*values) -> Optional[float]:
-    for value in values:
-        if isinstance(value, bool):
+def pick_first_float(*values) -> Optional[float]:
+    """Return the first field that can be treated as seconds."""
+    for raw_value in values:
+        if isinstance(raw_value, bool):
             continue
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+        if isinstance(raw_value, str):
             try:
-                return float(value)
+                return float(raw_value)
             except ValueError:
                 continue
     return None
 
 
-def fetch_oembed_author(url: str) -> Optional[str]:
+def get_oembed_author(url: str) -> Optional[str]:
+    """Use YouTube oEmbed as a small fallback for missing channel names."""
     try:
         response = httpx.get(
             "https://www.youtube.com/oembed",
@@ -277,12 +283,13 @@ def fetch_oembed_author(url: str) -> Optional[str]:
         )
         if response.status_code != 200:
             return None
-        return first_text(response.json().get("author_name"))
+        return pick_first_text(response.json().get("author_name"))
     except Exception:
         return None
 
 
 def extract_handle(url: Optional[str]) -> Optional[str]:
+    """Recover @handle from a channel URL when yt-dlp omits the name."""
     if not url:
         return None
     parsed = urlparse(url)
@@ -293,6 +300,7 @@ def extract_handle(url: Optional[str]) -> Optional[str]:
 
 
 def extract_hashtags(info: dict) -> list[str]:
+    """Collect hashtags from structured tags and video descriptions."""
     tags = info.get("tags") or []
     hashtags = []
     for tag in tags:

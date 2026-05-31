@@ -26,22 +26,22 @@ class InstagramAnalysisError(ValueError):
 
 
 def analyze_instagram_reel(url: str, assigned_id: str = None) -> VideoAnalysis:
-    video_id = extract_instagram_video_id(url)
-    logger.info(f"Starting analysis of Instagram Reel URL: {url} (ID: {video_id})")
+    reel_id = get_reel_id(url)
+    logger.info(f"Starting analysis of Instagram Reel URL: {url} (ID: {reel_id})")
     
-    info = fetch_instagram_info(url)
-    metadata = build_metadata(info)
+    reel_info = get_reel_info(url)
+    metadata = make_reel_metadata(reel_info)
     logger.info(f"Instagram metadata loaded: '{metadata.title}' by {metadata.creator}")
 
     with TemporaryDirectory(prefix="instagram-audio-") as temp_dir:
         logger.info(f"Downloading Instagram audio to {temp_dir} using yt-dlp...")
-        audio_path = download_audio(url=url, output_dir=Path(temp_dir))
+        audio_path = download_reel_audio(url=url, out_dir=Path(temp_dir))
         logger.info("Transcribing Instagram Reel audio with Whisper model...")
         transcript = transcribe_audio(audio_path)
 
     return VideoAnalysis(
         platform="instagram",
-        video_id=video_id,
+        video_id=reel_id,
         video_label=assigned_id,
         url=url,
         metadata=metadata,
@@ -54,7 +54,8 @@ def analyze_instagram_reel(url: str, assigned_id: str = None) -> VideoAnalysis:
     )
 
 
-def extract_instagram_video_id(url: str) -> str:
+def get_reel_id(url: str) -> str:
+    """Pull the short Reel code out of a public Instagram URL."""
     match = INSTAGRAM_REEL_PATTERN.search(url)
     if not match:
         logger.warning(f"Failed to extract Reel ID from invalid Instagram URL: {url}")
@@ -62,8 +63,9 @@ def extract_instagram_video_id(url: str) -> str:
     return match.group("id")
 
 
-def fetch_instagram_info(url: str) -> dict:
-    ydl_options = instagram_ydl_options({
+def get_reel_info(url: str) -> dict:
+    """Read Reel metadata with yt-dlp; cookies are optional for local testing."""
+    ydl_opts = add_instagram_cookies({
         "quiet": True,
         "skip_download": True,
         "noplaylist": True,
@@ -71,74 +73,78 @@ def fetch_instagram_info(url: str) -> dict:
     })
 
     try:
-        with YoutubeDL(ydl_options) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
-    except DownloadError as exc:
-        logger.error(f"yt-dlp Instagram metadata download failed for {url}: {exc}", exc_info=True)
-        raise InstagramAnalysisError("Unable to retrieve Instagram metadata.") from exc
+    except DownloadError as err:
+        logger.error(f"yt-dlp Instagram metadata download failed for {url}: {err}", exc_info=True)
+        raise InstagramAnalysisError("Unable to retrieve Instagram metadata.") from err
 
 
-def build_metadata(info: dict) -> VideoMetadata:
+def make_reel_metadata(info: dict) -> VideoMetadata:
+    """Normalize Instagram/yt-dlp's mixed field names into our app schema."""
     return VideoMetadata(
         title=info.get("title") or info.get("description"),
         creator=info.get("uploader") or info.get("channel") or "Unknown Creator",
-        follower_count=first_int(
+        follower_count=pick_first_int(
             info.get("uploader_follower_count"),
             info.get("channel_follower_count"),
             info.get("creator_follower_count"),
             info.get("subscriber_count"),
         ),
         hashtags=extract_hashtags(info),
-        views=first_int(
+        views=pick_first_int(
             info.get("view_count"),
             info.get("play_count"),
             info.get("video_view_count"),
             info.get("view_count_reel"),
         ),
-        likes=first_int(info.get("like_count")),
-        comments=first_int(info.get("comment_count")),
+        likes=pick_first_int(info.get("like_count")),
+        comments=pick_first_int(info.get("comment_count")),
         upload_date=info.get("upload_date"),
-        duration=first_float(info.get("duration")),
+        duration=pick_first_float(info.get("duration")),
     )
 
 
-def first_float(*values) -> Optional[float]:
-    for value in values:
-        if isinstance(value, bool):
+def pick_first_float(*values) -> Optional[float]:
+    """Return the first value that behaves like seconds with decimals."""
+    for raw_value in values:
+        if isinstance(raw_value, bool):
             continue
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+        if isinstance(raw_value, str):
             try:
-                return float(value)
+                return float(raw_value)
             except ValueError:
                 continue
     return None
 
 
-def first_int(*values) -> Optional[int]:
-    for value in values:
-        if isinstance(value, bool):
+def pick_first_int(*values) -> Optional[int]:
+    """Return the first value that can safely be shown as a count."""
+    for raw_value in values:
+        if isinstance(raw_value, bool):
             continue
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str) and value.isdigit():
-            return int(value)
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, float):
+            return int(raw_value)
+        if isinstance(raw_value, str) and raw_value.isdigit():
+            return int(raw_value)
     return None
 
 
 def extract_hashtags(info: dict) -> list[str]:
-    values = []
-    values.extend(info.get("tags") or [])
+    """Collect hashtags from both structured tags and caption text."""
+    raw_tags = []
+    raw_tags.extend(info.get("tags") or [])
     description = info.get("description") or info.get("title") or ""
-    values.extend(re.findall(r"#([\w.-]+)", description))
+    raw_tags.extend(re.findall(r"#([\w.-]+)", description))
 
     seen = set()
     hashtags = []
-    for value in values:
-        cleaned = str(value).strip().lstrip("#")
+    for raw_tag in raw_tags:
+        cleaned = str(raw_tag).strip().lstrip("#")
         if not cleaned:
             continue
         tag = f"#{cleaned}"
@@ -150,35 +156,37 @@ def extract_hashtags(info: dict) -> list[str]:
     return hashtags[:30]
 
 
-def download_audio(url: str, output_dir: Path) -> Path:
-    ydl_options = instagram_ydl_options({
+def download_reel_audio(url: str, out_dir: Path) -> Path:
+    """Save Reel audio in a temp folder so Whisper can transcribe it."""
+    ydl_opts = add_instagram_cookies({
         "format": "bestaudio/best",
-        "outtmpl": str(output_dir / "%(id)s.%(ext)s"),
+        "outtmpl": str(out_dir / "%(id)s.%(ext)s"),
         "quiet": True,
         "noplaylist": True,
         "no_warnings": True,
     })
 
     try:
-        with YoutubeDL(ydl_options) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-    except DownloadError as exc:
-        logger.error(f"yt-dlp Instagram audio download failed for {url}: {exc}", exc_info=True)
-        raise InstagramAnalysisError("Unable to download Instagram Reel audio.") from exc
+    except DownloadError as err:
+        logger.error(f"yt-dlp Instagram audio download failed for {url}: {err}", exc_info=True)
+        raise InstagramAnalysisError("Unable to download Instagram Reel audio.") from err
 
-    expected_path = output_dir / f"{info.get('id')}.{info.get('ext')}"
+    expected_path = out_dir / f"{info.get('id')}.{info.get('ext')}"
     if expected_path.exists():
         return expected_path
 
-    downloaded_files = [path for path in output_dir.iterdir() if path.is_file()]
-    if not downloaded_files:
+    files = [path for path in out_dir.iterdir() if path.is_file()]
+    if not files:
         raise InstagramAnalysisError("Instagram audio download did not produce a file.")
 
-    return max(downloaded_files, key=lambda path: path.stat().st_size)
+    return max(files, key=lambda path: path.stat().st_size)
 
 
-def instagram_ydl_options(base_options: dict) -> dict:
-    options = dict(base_options)
+def add_instagram_cookies(base_opts: dict) -> dict:
+    """Attach a local cookies.txt file to yt-dlp options when configured."""
+    opts = dict(base_opts)
     cookie_file = get_settings().instagram_cookie_file.strip()
     if cookie_file:
         path = Path(cookie_file).expanduser()
@@ -186,8 +194,8 @@ def instagram_ydl_options(base_options: dict) -> dict:
             raise InstagramAnalysisError(
                 f"Instagram cookie file was configured but not found: {path}"
             )
-        options["cookiefile"] = str(path)
-    return options
+        opts["cookiefile"] = str(path)
+    return opts
 
 
 def transcribe_audio(audio_path: Path) -> list[TranscriptSegment]:
