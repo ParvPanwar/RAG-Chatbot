@@ -1,0 +1,17 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+youtube-transcript-api==1.2.4
+yt-dlp==2025.10.14
+faster-whisper==1.2.1
+chromadb==0.5.23
+grpcio==1.80.0
+langchain==0.3.13
+langchain-chroma==0.1.4
+langchain-huggingface==0.1.2
+langchain-text-splitters==0.3.4
+httpx==0.28.1
+sentence-transformers==3.4.1
+urllib3<2

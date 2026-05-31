@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+data/chroma/
+logs/
+cookies/
+
+frontend/.env.local
+frontend/.next/
+frontend/node_modules/
