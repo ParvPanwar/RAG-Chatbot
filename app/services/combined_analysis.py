@@ -4,6 +4,7 @@ from app.services.analysis_store import save_analysis_result
 from app.services.instagram_analyzer import analyze_instagram_reel, InstagramAnalysisError
 from app.services.youtube_analyzer import analyze_youtube_video, YouTubeAnalysisError
 from app.services.comparison import build_comparison_summary
+from app.services.vector_store import index_video_transcripts
 
 logger = logging.getLogger(__name__)
 
@@ -59,5 +60,10 @@ def analyze_videos(platform: str, video_url_a: str, video_url_b: str) -> Analyze
     analysis_id = save_analysis_result(result)
     result.analysis_id = analysis_id
     logger.info(f"Analysis result saved with ID: {analysis_id}")
+
+    logger.info(f"Indexing transcripts for analysis_id: {analysis_id}...")
+    chunk_count = index_video_transcripts(analysis_id, [result.video_a, result.video_b])
+    result.chunks_indexed = chunk_count
+    logger.info(f"Indexed {chunk_count} transcript chunks.")
     
     return result
