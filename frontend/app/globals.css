@@ -329,7 +329,7 @@ dd {
   overflow-y: auto;
   scroll-behavior: smooth;
   scrollbar-gutter: stable;
-  padding: 18px 2px;
+  padding: 18px 2px 28px;
   overscroll-behavior: contain;
 }
 
@@ -359,15 +359,40 @@ dd {
   display: grid;
   gap: 10px;
   max-width: 100%;
-  overflow-x: auto;
+  min-width: 0;
+  overflow-x: hidden;
   padding-bottom: 2px;
+}
+
+.markdownMessage > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .markdownMessage p,
 .markdownMessage ul,
 .markdownMessage ol,
-.markdownMessage blockquote {
+.markdownMessage blockquote,
+.markdownMessage h1,
+.markdownMessage h2,
+.markdownMessage h3,
+.markdownMessage h4,
+.markdownMessage h5,
+.markdownMessage h6 {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdownMessage h1,
+.markdownMessage h2,
+.markdownMessage h3,
+.markdownMessage h4,
+.markdownMessage h5,
+.markdownMessage h6 {
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 800;
 }
 
 .markdownMessage ul,
@@ -376,12 +401,14 @@ dd {
 }
 
 .markdownMessage table {
-  width: max-content;
-  min-width: 100%;
+  display: block;
+  width: 100%;
   max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   font-size: 12px;
   line-height: 1.35;
+  scrollbar-gutter: stable;
 }
 
 .markdownMessage th,
@@ -414,7 +441,8 @@ dd {
 .message.assistant {
   align-self: flex-start;
   background: var(--panel);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 .citations {
@@ -701,6 +729,16 @@ blockquote {
   border-top: 1px solid var(--line);
   padding: 10px 0;
   transition: all 0.2s ease;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.citationDetails[open] {
+  max-height: min(360px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
 }
 
 .citationSummary {
@@ -715,6 +753,7 @@ blockquote {
   padding-left: 14px;
   border-left: 2px solid var(--line);
   min-width: 0;
+  max-width: 100%;
 }
 
 .citationTitle {
@@ -726,8 +765,9 @@ blockquote {
 
 .citationQuote {
   margin: 4px 0 0 !important;
-  max-height: 180px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;

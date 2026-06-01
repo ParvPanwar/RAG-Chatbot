@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     instagram_cookie_file: str = ""
+    apify_api_token: str = ""
+    apify_instagram_actor_id: str = ""
+    apify_timeout_seconds: int = 90
     chroma_persist_dir: str = "data/chroma"
     chroma_collection_name: str = "video_transcripts_local"
     rag_top_k: int = 6

@@ -12,6 +12,7 @@ from yt_dlp.utils import DownloadError
 from app.config import get_settings
 from app.schemas.common import TranscriptSegment, VideoAnalysis, VideoMetadata
 from app.services.engagement import calculate_engagement_rate
+from app.services.apify_instagram import ApifyInstagramError, fetch_reel_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,7 @@ def analyze_instagram_reel(url: str, assigned_id: str = None) -> VideoAnalysis:
     reel_id = get_reel_id(url)
     logger.info(f"Starting analysis of Instagram Reel URL: {url} (ID: {reel_id})")
     
-    reel_info = get_reel_info(url)
-    metadata = make_reel_metadata(reel_info)
+    metadata = get_reel_metadata(url)
     logger.info(f"Instagram metadata loaded: '{metadata.title}' by {metadata.creator}")
 
     with TemporaryDirectory(prefix="instagram-audio-") as temp_dir:
@@ -78,6 +78,35 @@ def get_reel_info(url: str) -> dict:
     except DownloadError as err:
         logger.error(f"yt-dlp Instagram metadata download failed for {url}: {err}", exc_info=True)
         raise InstagramAnalysisError("Unable to retrieve Instagram metadata.") from err
+
+
+def get_reel_metadata(url: str) -> VideoMetadata:
+    """Prefer Apify for public metrics, then fall back to yt-dlp."""
+    # yt-dlp often misses Instagram Reel views, so Apify is used for public metrics.
+    try:
+        apify_metadata = fetch_reel_metadata(url)
+    except ApifyInstagramError as err:
+        logger.warning(f"Apify Instagram metadata failed; falling back to yt-dlp: {err}")
+        apify_metadata = None
+
+    if apify_metadata:
+        logger.info(
+            "Instagram metadata source: Apify (views=%s, likes=%s, comments=%s)",
+            apify_metadata.views,
+            apify_metadata.likes,
+            apify_metadata.comments,
+        )
+        return apify_metadata
+
+    reel_info = get_reel_info(url)
+    metadata = make_reel_metadata(reel_info)
+    logger.info(
+        "Instagram metadata source: yt-dlp fallback (views=%s, likes=%s, comments=%s)",
+        metadata.views,
+        metadata.likes,
+        metadata.comments,
+    )
+    return metadata
 
 
 def make_reel_metadata(info: dict) -> VideoMetadata:
