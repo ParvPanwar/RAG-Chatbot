@@ -309,6 +309,7 @@ dd {
   display: grid;
   grid-template-rows: auto 1fr auto;
   height: 100vh;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: #ece7dd;
@@ -326,6 +327,8 @@ dd {
   gap: 12px;
   min-height: 0;
   overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
   padding: 18px 2px;
   overscroll-behavior: contain;
 }
@@ -339,6 +342,7 @@ dd {
 
 .message {
   max-width: 92%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 12px;
@@ -354,7 +358,9 @@ dd {
 .markdownMessage {
   display: grid;
   gap: 10px;
+  max-width: 100%;
   overflow-x: auto;
+  padding-bottom: 2px;
 }
 
 .markdownMessage p,
@@ -372,6 +378,7 @@ dd {
 .markdownMessage table {
   width: max-content;
   min-width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
   line-height: 1.35;
@@ -383,6 +390,7 @@ dd {
   border: 1px solid var(--line);
   padding: 8px;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 .markdownMessage th {
@@ -406,6 +414,7 @@ dd {
 .message.assistant {
   align-self: flex-start;
   background: var(--panel);
+  overflow: hidden;
 }
 
 .citations {
@@ -705,6 +714,7 @@ blockquote {
   margin-top: 8px;
   padding-left: 14px;
   border-left: 2px solid var(--line);
+  min-width: 0;
 }
 
 .citationTitle {
@@ -716,6 +726,8 @@ blockquote {
 
 .citationQuote {
   margin: 4px 0 0 !important;
+  max-height: 180px;
+  overflow: auto;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
@@ -883,4 +895,3 @@ blockquote {
   font-variant-numeric: tabular-nums;
   vertical-align: middle;
 }
-
