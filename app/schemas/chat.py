@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     analysis_id: str
     message: str = Field(..., min_length=1)
+    conversation_id: Optional[str] = None
 
 
 class Citation(BaseModel):
@@ -20,5 +21,6 @@ class Citation(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    conversation_id: str
     answer: str
     citations: list[Citation]

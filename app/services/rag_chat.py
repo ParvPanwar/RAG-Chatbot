@@ -1,14 +1,20 @@
+from collections.abc import AsyncIterator
 import json
 import re
+from typing import Optional
+from uuid import uuid4
 
 import httpx
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain.memory import ConversationBufferWindowMemory
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.config import get_settings
 from app.schemas.chat import ChatResponse, Citation
 from app.services.analysis_store import get_analysis_result
 from app.services.context_builder import build_context
 from app.services.query_router import classify_query
+
+_conversation_memory: dict[str, ConversationBufferWindowMemory] = {}
 
 
 class ChatConfigurationError(ValueError):
@@ -18,10 +24,14 @@ class ChatConfigurationError(ValueError):
 def answer_question(
     analysis_id: str,
     message: str,
+    conversation_id: Optional[str] = None,
 ) -> ChatResponse:
+    conversation_id = conversation_id or str(uuid4())
     if not looks_like_video_question(message):
         answer = off_topic_answer()
+        remember(conversation_id, HumanMessage(content=message), AIMessage(content=answer))
         return ChatResponse(
+            conversation_id=conversation_id,
             answer=answer,
             citations=[],
         )
@@ -35,21 +45,72 @@ def answer_question(
             "I do not have enough indexed transcript context to answer that question. "
             "Run analysis first, then ask about content present in the retrieved chunks."
         )
+        remember(conversation_id, HumanMessage(content=message), AIMessage(content=answer))
         return ChatResponse(
+            conversation_id=conversation_id,
             answer=answer,
             citations=[],
         )
 
-    messages = build_chat_messages(message, context_text, intent)
+    messages = build_chat_messages(conversation_id, message, context_text, intent)
     answer = ask_ollama_once(messages)
 
+    remember(conversation_id, HumanMessage(content=message), AIMessage(content=answer))
     return ChatResponse(
+        conversation_id=conversation_id,
         answer=answer,
         citations=build_citations(docs),
     )
 
 
+async def stream_answer(
+    analysis_id: str,
+    message: str,
+    conversation_id: Optional[str] = None,
+) -> AsyncIterator[str]:
+    conversation_id = conversation_id or str(uuid4())
+    if not looks_like_video_question(message):
+        answer = off_topic_answer()
+        remember(conversation_id, HumanMessage(content=message), AIMessage(content=answer))
+        yield make_sse_event("conversation", conversation_id)
+        yield make_sse_event("token", answer)
+        yield make_sse_event("citations", [])
+        yield make_sse_event("done", "[DONE]")
+        return
+
+    analysis = get_analysis_result(analysis_id)
+    intent = classify_query(message)
+    context_text, docs = build_context(intent, analysis_id, message, analysis)
+
+    if not docs and intent == "general_rag":
+        answer = (
+            "I do not have enough indexed transcript context to answer that question. "
+            "Run analysis first, then ask about content present in the retrieved chunks."
+        )
+        remember(conversation_id, HumanMessage(content=message), AIMessage(content=answer))
+        yield make_sse_event("conversation", conversation_id)
+        yield make_sse_event("token", answer)
+        yield make_sse_event("citations", [])
+        yield make_sse_event("done", "[DONE]")
+        return
+
+    messages = build_chat_messages(conversation_id, message, context_text, intent)
+    yield make_sse_event("conversation", conversation_id)
+
+    answer_parts: list[str] = []
+    async for token in stream_ollama_tokens(messages):
+        if token:
+            answer_parts.append(token)
+            yield make_sse_event("token", token)
+
+    answer = "".join(answer_parts)
+    remember(conversation_id, HumanMessage(content=message), AIMessage(content=answer))
+    yield make_sse_event("citations", [citation.model_dump() for citation in build_citations(docs)])
+    yield make_sse_event("done", "[DONE]")
+
+
 def build_chat_messages(
+    conversation_id: str,
     message: str,
     context_text: str,
     intent: str,
@@ -57,6 +118,7 @@ def build_chat_messages(
     system_prompt = _build_system_prompt(intent)
     return [
         SystemMessage(content=system_prompt),
+        *get_memory_messages(conversation_id),
         HumanMessage(
             content=(
                 f"Context:\n{context_text}\n\n"
@@ -155,6 +217,25 @@ def ask_ollama_once(messages: list[BaseMessage]) -> str:
     return str(response.json().get("message", {}).get("content", ""))
 
 
+async def stream_ollama_tokens(messages: list[BaseMessage]) -> AsyncIterator[str]:
+    base_url, model, api_key = get_ollama_settings()
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
+            f"{base_url}/api/chat",
+            headers=ollama_headers(api_key),
+            json=build_ollama_payload(model, messages, stream=True),
+        ) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise RuntimeError(extract_ollama_error_from_body(body))
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                yield str(payload.get("message", {}).get("content", ""))
+
+
 def build_ollama_payload(model: str, messages: list[BaseMessage], stream: bool) -> dict:
     return {
         "model": model,
@@ -167,6 +248,8 @@ def build_ollama_payload(model: str, messages: list[BaseMessage], stream: bool) 
 def to_ollama_message(message: BaseMessage) -> dict[str, str]:
     if isinstance(message, SystemMessage):
         role = "system"
+    elif isinstance(message, AIMessage):
+        role = "assistant"
     else:
         role = "user"
     return {"role": role, "content": str(message.content)}
@@ -246,6 +329,27 @@ def off_topic_answer() -> str:
     )
 
 
+def remember(conversation_id: str, user_message: HumanMessage, ai_message: AIMessage) -> None:
+    memory = get_conversation_memory(conversation_id)
+    memory.chat_memory.add_message(user_message)
+    memory.chat_memory.add_message(ai_message)
+
+
+def get_memory_messages(conversation_id: str) -> list[BaseMessage]:
+    memory = get_conversation_memory(conversation_id)
+    return list(memory.load_memory_variables({}).get("history", []))
+
+
+def get_conversation_memory(conversation_id: str) -> ConversationBufferWindowMemory:
+    if conversation_id not in _conversation_memory:
+        _conversation_memory[conversation_id] = ConversationBufferWindowMemory(
+            k=6,
+            return_messages=True,
+            memory_key="history",
+        )
+    return _conversation_memory[conversation_id]
+
+
 def build_citations(documents) -> list[Citation]:
     seen: set[str] = set()
     citations: list[Citation] = []
@@ -298,3 +402,7 @@ def _fmt_ts(seconds: float) -> str:
     mm = total // 60
     ss = total % 60
     return f"{mm:02d}:{ss:02d}"
+
+
+def make_sse_event(event: str, data) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
